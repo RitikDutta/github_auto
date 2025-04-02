@@ -1,1 +1,1 @@
-hello world
+Hello world from the Github_Auto class!
