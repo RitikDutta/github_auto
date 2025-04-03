@@ -1,6 +1,6 @@
 # Amla Oil
 
-vitamin = 100
+vitamin 40
 
 
 ## Overview
@@ -57,4 +57,3 @@ Amla oil is a potent hair care ingredient renowned for its high antioxidant cont
 ## References
 - Studies on the antioxidant and antimicrobial effects of amla oil.
 - Research on its traditional use in Ayurveda for promoting hair health.
-
