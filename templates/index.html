@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LangGraph Gemini Chat</title>
+    <style>
+        body { font-family: sans-serif; margin: 20px; background-color: #f4f4f4; }
+        .container { max-width: 700px; margin: auto; background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+        h1 { text-align: center; color: #333; }
+        textarea { width: 95%; padding: 10px; margin-bottom: 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 1em; min-height: 60px; }
+        input[type="submit"] { background-color: #5cb85c; color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; font-size: 1em; }
+        input[type="submit"]:hover { background-color: #4cae4c; }
+        .result { margin-top: 20px; padding: 15px; border: 1px solid #eee; background-color: #f9f9f9; border-radius: 4px; }
+        .result h2 { margin-top: 0; color: #555; font-size: 1.1em; }
+        .result p, .result pre { margin-bottom: 0; white-space: pre-wrap; /* Preserve whitespace and wrap */ word-wrap: break-word; } /* Wrap long words */
+        .prompt-display { font-style: italic; color: #666; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Ask Gemini via LangGraph</h1>
+        <form method="post">
+            <label for="prompt">Enter your prompt:</label><br>
+            <!-- Use textarea for potentially longer input -->
+            <textarea id="prompt" name="prompt" rows="3" required></textarea><br>
+            <input type="submit" value="Send to LangGraph">
+        </form>
+
+        <!-- Display the result if available -->
+        {% if response %}
+            <div class="result">
+                {% if prompt %}
+                <h2>Your Prompt:</h2>
+                <p class="prompt-display">{{ prompt }}</p>
+                <hr>
+                {% endif %}
+                <h2>LLM Response:</h2>
+                <!-- Use <pre> to better preserve formatting from the LLM -->
+                <pre>{{ response }}</pre>
+            </div>
+        {% endif %}
+    </div>
+</body>
+</html>
