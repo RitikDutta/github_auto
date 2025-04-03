@@ -3,7 +3,7 @@ import base64
 import json
 from typing import List, Optional, TypedDict, Annotated, Sequence
 import operator # For state updates
-import re # For more specific line replacement later if needed
+import re # For potential future use
 
 from flask import Flask, request, render_template, flash
 from dotenv import load_dotenv
@@ -105,29 +105,22 @@ class Github_Auto:
         print(f"\nTOOL: Attempt create/update: {file_path} on branch '{self.branch}'")
         current_sha = None
         try:
-            # Always try to get SHA for update, create if not found
             existing_file = self.repo.get_contents(file_path, ref=self.branch)
             if not isinstance(existing_file, list) and existing_file.type == 'file':
                 current_sha = existing_file.sha
                 print(f"File '{file_path}' exists (SHA: {current_sha}). Updating.")
             else:
-                # This case should ideally not be hit if path is directory, checked earlier
-                # But if get_contents returns unexpected structure
                  msg = f"Warning: Path '{file_path}' exists but structure is unexpected. Attempting create/update cautiously."
                  print(msg)
-                 # Decide whether to proceed or return error
-                 # return msg
         except UnknownObjectException:
             print(f"File '{file_path}' not exist. Creating."); current_sha = None
         except GithubException as e:
-            # Handle potential rate limits or other issues during check
             msg = f"GitHub error checking exist '{file_path}': {e}"; print(msg); return msg
         except Exception as e:
              msg = f"Unexpected error checking '{file_path}': {e}"; print(msg); return msg
-        # Proceed with create or update
         try:
             action = "(update)" if current_sha else "(create)"
-            full_commit_message = f"{commit_message} {action}" # Add action to message
+            full_commit_message = f"{commit_message} {action}"
             if current_sha:
                 commit_info = self.repo.update_file(path=file_path, message=full_commit_message, content=content, sha=current_sha, branch=self.branch)
                 success_msg = f"Success update '{file_path}'. Commit: {commit_info['commit'].sha}"
@@ -151,6 +144,16 @@ GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
 GITHUB_REPO_NAME = os.environ.get("GITHUB_REPO_NAME")
 GITHUB_BRANCH = os.environ.get("GITHUB_BRANCH", "main")
 
+# *** Define Expected Directory Structure ***
+# This helps the LLM determine the correct path
+DIRECTORY_STRUCTURE = {
+    "ingredient": "docs/ingredients",
+    "formulation": "docs/formulations",
+    "test_result": "data/results",
+    "default": "docs" # Fallback directory
+}
+BASE_TEMPLATE_PATH = "base_template.md" # Path to your template file
+
 if not GOOGLE_API_KEY: raise ValueError("GOOGLE_API_KEY missing.")
 if not GITHUB_TOKEN: raise ValueError("GITHUB_TOKEN missing.")
 if not GITHUB_REPO_NAME: raise ValueError("GITHUB_REPO_NAME missing.")
@@ -173,7 +176,7 @@ if github_bot:
 
     @tool
     def read_github_file(file_path: str) -> str:
-        """Reads the content of a specific file using its full path from the configured GitHub repository."""
+        """Reads the content of a specific file using its full path from the configured GitHub repository. Can be used to read template files."""
         return github_bot.get_file_content(file_path)
 
     @tool
@@ -181,43 +184,26 @@ if github_bot:
         """Creates a new file OR completely overwrites an existing file (using its full path) with the provided content in the configured GitHub repository. Requires a commit message."""
         return github_bot.create_or_update_file(file_path, content, commit_message)
 
-    # *** NEW TOOL ***
+    # Note: update_file_section tool is kept from previous step, can be used if needed
     @tool
     def update_file_section(file_path: str, target_section_identifier: str, new_content_for_section: str, commit_message: str) -> str:
         """Updates a specific section within an existing file. Reads the file, finds the *first line* containing the 'target_section_identifier' string, replaces that entire line with 'new_content_for_section', and commits the change. Fails if the file or identifier is not found. Requires a commit message."""
         print(f"\nTOOL: Attempting partial update for: {file_path}")
-        # 1. Read existing content
         current_content = github_bot.get_file_content(file_path)
         if current_content.startswith("Error:"):
             print(f"Partial update failed: Could not read file. Error: {current_content}")
             return f"Error updating section: Could not read file '{file_path}'. Details: {current_content}"
-
-        # 2. Find and replace the line
-        lines = current_content.splitlines()
-        found = False
-        modified_lines = []
+        lines = current_content.splitlines(); found = False; modified_lines = []
         for line in lines:
-            # Replace the first line found containing the identifier
             if not found and target_section_identifier in line:
-                modified_lines.append(new_content_for_section) # Replace the line
-                found = True
+                modified_lines.append(new_content_for_section); found = True
                 print(f"Found target section identifier '{target_section_identifier}' and replaced line.")
-            else:
-                modified_lines.append(line) # Keep other lines as is
-
-        if not found:
-            msg = f"Error updating section: The target identifier '{target_section_identifier}' was not found in the file '{file_path}'."
-            print(msg)
-            return msg
-
-        # 3. Join lines and write back
+            else: modified_lines.append(line)
+        if not found: msg = f"Error updating section: Identifier '{target_section_identifier}' not found in '{file_path}'."; print(msg); return msg
         modified_content = "\n".join(modified_lines)
-        # Use the existing create_or_update_file logic to handle the commit
         print(f"Content modified. Committing partial update for {file_path}...")
         return github_bot.create_or_update_file(file_path, modified_content, commit_message)
-    # *** END NEW TOOL ***
 
-    # Add the new tool to the list
     tools = [list_github_files, read_github_file, write_github_file, update_file_section]
     print(f"--- {len(tools)} GitHub Tools Registered ---")
 else:
@@ -230,30 +216,37 @@ llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash-latest", google_api_key=GOO
                              convert_system_message_to_human=True)
 llm_with_tools = llm.bind_tools(tools)
 
-# *** UPDATED SYSTEM PROMPT ***
-system_prompt = f"""You are a helpful assistant that can interact with a GitHub repository ({GITHUB_REPO_NAME} on branch {GITHUB_BRANCH}) using the provided tools.
+# *** SIGNIFICANTLY UPDATED SYSTEM PROMPT ***
+system_prompt = f"""You are a helpful assistant managing a GitHub repository ({GITHUB_REPO_NAME} on branch {GITHUB_BRANCH}) using tools.
 
 Available Tools:
-- list_github_files(directory_path): Shows files/directories in a given path (root if ""). Does not recurse.
-- read_github_file(file_path): Reads a file's content using its FULL path.
-- write_github_file(file_path, content, commit_message): Creates a new file OR **completely overwrites** an existing file with the new content. Requires a commit message.
-- update_file_section(file_path, target_section_identifier, new_content_for_section, commit_message): **Modifies only a part** of an existing file. It finds the *first line containing* the `target_section_identifier` string and replaces that *entire line* with `new_content_for_section`. Requires the full file path and a commit message.
+- list_github_files(directory_path): Shows files/dirs in a path (root if "").
+- read_github_file(file_path): Reads a file's content using FULL path. Crucial for reading the template file.
+- write_github_file(file_path, content, commit_message): Creates/Overwrites a file with FULL path, CONTENT, and commit message.
+- update_file_section(file_path, target_section_identifier, new_content_for_section, commit_message): Updates a SINGLE line in an existing file. Requires full path, identifier on the line, the new full line content, and commit message.
 
-IMPORTANT INSTRUCTIONS:
-1. File Paths: Tools require FULL paths from the repository root (e.g., 'src/utils/helpers.py').
-2. Finding Files: If the user gives only a filename (e.g., "read config.json") and you don't know the path or `read_github_file` fails with 'File not found':
-    a. Use `list_github_files` first (check root "" or a likely directory).
-    b. Find the correct full path from the list.
-    c. Call the required tool again with the full path. If not found after listing, inform the user.
-3. Choosing Write vs Update:
-    - Use `write_github_file` for creating new files or when the user wants to replace the *entire* content.
-    - Use `update_file_section` ONLY when the user explicitly asks to change, update, or modify a *specific part*, line, or value *within* an existing file (e.g., "change the version number", "update the value of X").
-4. Using `update_file_section`: Provide a `target_section_identifier` that is a unique piece of text expected to be present *on the line you want to replace*. Provide the *complete new line content* as `new_content_for_section`.
-5. **Commit Messages**:
-    - All tools that modify files (`write_github_file`, `update_file_section`) require a `commit_message`.
-    - **If the user does NOT provide a commit message**, YOU MUST GENERATE ONE.
-    - Good generated messages are concise and reflect the action: "feat: Create [file_path]", "fix: Update [file_path] content", "refactor: Modify section in [file_path]", "chore: Update value in [file_path]". Include this generated message when calling the tool.
-6. Present final results clearly. Show file content when read. Confirm success (including commit SHA) when writing or updating. Report errors clearly.
+*** Key Procedures ***
+
+1.  **File Paths:** ALWAYS use full paths from the repository root (e.g., 'docs/ingredients/argan_oil.md').
+2.  **Finding Files:** If unsure of a path or `read_github_file` fails, use `list_github_files` to find the correct full path before trying `read_github_file` or `write_github_file` again.
+3.  **Commit Messages:** For `write_github_file` or `update_file_section`, if the user doesn't provide a commit message, GENERATE a concise one reflecting the action (e.g., "feat: Add ingredient [name]", "docs: Update [file] structure", "fix: Correct value in [file]"). Include it when calling the tool.
+4.  **Creating NEW Structured Files (e.g., ingredients, formulations):**
+    a.  **Identify File Type & Name:** Determine the type (e.g., "ingredient") and the specific name (e.g., "test oil"). Create a filename (e.g., `test_oil.md`). All new structured files MUST be Markdown (`.md`).
+    b.  **Determine Directory:** Use the following structure to decide the FULL path:
+        - Ingredients: `{DIRECTORY_STRUCTURE['ingredient']}/[filename].md`
+        - Formulations: `{DIRECTORY_STRUCTURE['formulation']}/[filename].md`
+        - Test Results: `{DIRECTORY_STRUCTURE['test_result']}/[filename].md`
+        - Other/Unspecified: `{DIRECTORY_STRUCTURE['default']}/[filename].md`
+        Example: For an ingredient named "Test Oil", the path is `{DIRECTORY_STRUCTURE['ingredient']}/test_oil.md`.
+    c.  **Read Template:** Call `read_github_file` to get the content of the base template file located at `{BASE_TEMPLATE_PATH}`.
+    d.  **Generate Content:** Once you have the template content (from the previous step's tool result) AND the user's details for the new item:
+        - Understand the structure (headings like # Name, ## Pros, ## Cons) from the template content.
+        - **GENERATE THE COMPLETE MARKDOWN CONTENT** for the new file. Replace placeholders (like '[Item Name Placeholder]') and fill in the sections (Pros, Cons, etc.) using the user's provided details, maintaining the template's heading structure.
+    e.  **Write File:** Call `write_github_file` with the determined full path, the **complete generated Markdown content**, and a generated commit message.
+    f.  **Confirm:** Report success (including commit SHA from the tool output) or failure to the user.
+
+5.  **Updating Sections (`update_file_section`):** Use this ONLY for modifying a *specific existing line*. Provide a unique string from that line as `target_section_identifier` and the complete new line content as `new_content_for_section`. Generate a commit message.
+6.  **Clarity:** Respond clearly, confirming actions and presenting results (like file content or commit SHAs).
 """
 
 class AgentState(TypedDict):
@@ -273,6 +266,7 @@ def should_continue(state: AgentState) -> str:
 def call_model(state: AgentState):
     messages = state['messages']
     print(f"\n--- Node: Agent (Calling LLM) ---")
+    # Always include the system prompt
     messages_with_system_prompt = [SystemMessage(content=system_prompt)] + messages
     print(f"Messages sent to LLM: {[m.type for m in messages_with_system_prompt]}")
     response = llm_with_tools.invoke(messages_with_system_prompt)
@@ -280,6 +274,7 @@ def call_model(state: AgentState):
     if hasattr(response, 'content'): print(f"LLM Content: {response.content[:100]}...")
     if hasattr(response, 'tool_calls') and response.tool_calls: print(f"LLM Tool Calls: {response.tool_calls}")
     return {"messages": [response]}
+
 
 # call_tool function remains the same (handles stringifying tool output)
 def call_tool(state: AgentState):
@@ -306,13 +301,13 @@ def call_tool(state: AgentState):
 
         print(f"Invoking tool: {tool_name} with args: {tool_args}")
         try:
-            response_content = selected_tool.invoke(tool_args) # Call the tool directly
+            # Invoke the tool using the @tool wrapper's logic
+            response_content = selected_tool.invoke(tool_args)
             if not isinstance(response_content, str):
                 print(f"Tool type {type(response_content)}. Stringify.")
                 try: stringified_content = json.dumps(response_content, indent=2)
                 except TypeError: stringified_content = str(response_content)
-            else:
-                stringified_content = response_content
+            else: stringified_content = response_content
             print(f"Tool Response (stringified): {stringified_content}")
             tool_messages.append(ToolMessage(content=stringified_content, tool_call_id=tool_call_id))
         except Exception as e:
@@ -320,6 +315,7 @@ def call_tool(state: AgentState):
             import traceback; traceback.print_exc()
             tool_messages.append(ToolMessage(content=f"Error tool {tool_name}: {e}", tool_call_id=tool_call_id))
     return {"messages": tool_messages}
+
 
 # === 5. Define the LangGraph Workflow (remains the same) ===
 workflow = StateGraph(AgentState)
@@ -354,8 +350,8 @@ def home():
                 try:
                     inputs = {"messages": [HumanMessage(content=prompt_received)]}
                     print("Invoking LangGraph agent...")
-                    # Keep recursion limit reasonable, maybe increase slightly if needed for complex updates
-                    final_state = langgraph_agent_app.invoke(inputs, {"recursion_limit": 25})
+                    # Increased recursion limit for potentially longer template process
+                    final_state = langgraph_agent_app.invoke(inputs, {"recursion_limit": 30})
 
                     if final_state and final_state.get('messages'):
                         final_ai_message = None
