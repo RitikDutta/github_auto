@@ -3,28 +3,56 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>LangGraph Gemini Chat</title>
+    <title>LangGraph Agent Chat</title>
     <style>
+        /* (Keep your existing styles) */
         body { font-family: sans-serif; margin: 20px; background-color: #f4f4f4; }
         .container { max-width: 700px; margin: auto; background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
         h1 { text-align: center; color: #333; }
         textarea { width: 95%; padding: 10px; margin-bottom: 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 1em; min-height: 60px; }
-        input[type="submit"] { background-color: #5cb85c; color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; font-size: 1em; }
-        input[type="submit"]:hover { background-color: #4cae4c; }
+        input[type="submit"] { background-color: #007bff; color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; font-size: 1em; }
+        input[type="submit"]:hover { background-color: #0056b3; }
         .result { margin-top: 20px; padding: 15px; border: 1px solid #eee; background-color: #f9f9f9; border-radius: 4px; }
         .result h2 { margin-top: 0; color: #555; font-size: 1.1em; }
-        .result p, .result pre { margin-bottom: 0; white-space: pre-wrap; /* Preserve whitespace and wrap */ word-wrap: break-word; } /* Wrap long words */
-        .prompt-display { font-style: italic; color: #666; }
+        .result p, .result pre { margin-bottom: 0; white-space: pre-wrap; word-wrap: break-word; }
+        .prompt-display { font-style: italic; color: #666; margin-bottom: 10px;}
+        /* Flash message styles */
+        .flash { padding: 10px; margin-bottom: 15px; border-radius: 4px; }
+        .flash.success { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        .flash.danger { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+        .flash.warning { background-color: #fff3cd; color: #856404; border: 1px solid #ffeeba; }
+        .github-status { text-align: right; font-size: 0.8em; margin-bottom: 10px; }
+        .status-enabled { color: green; }
+        .status-disabled { color: red; }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>Ask Gemini via LangGraph</h1>
+        <h1>Ask the Agent (with GitHub Tools)</h1>
+
+        <!-- Display GitHub Tool Status -->
+        <div class="github-status">
+            GitHub Tools:
+            {% if github_enabled %}
+                <span class="status-enabled">Enabled</span>
+            {% else %}
+                <span class="status-disabled">Disabled</span>
+            {% endif %}
+        </div>
+
+        <!-- Display Flashed Messages -->
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="flash {{ category }}">{{ message }}</div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
         <form method="post">
             <label for="prompt">Enter your prompt:</label><br>
-            <!-- Use textarea for potentially longer input -->
-            <textarea id="prompt" name="prompt" rows="3" required></textarea><br>
-            <input type="submit" value="Send to LangGraph">
+            <textarea id="prompt" name="prompt" rows="3" required>{{ prompt if prompt else '' }}</textarea><br> <!-- Retain prompt on page reload -->
+            <input type="submit" value="Send to Agent">
         </form>
 
         <!-- Display the result if available -->
@@ -35,8 +63,7 @@
                 <p class="prompt-display">{{ prompt }}</p>
                 <hr>
                 {% endif %}
-                <h2>LLM Response:</h2>
-                <!-- Use <pre> to better preserve formatting from the LLM -->
+                <h2>Agent Response:</h2>
                 <pre>{{ response }}</pre>
             </div>
         {% endif %}
