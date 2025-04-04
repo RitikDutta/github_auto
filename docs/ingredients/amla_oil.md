@@ -1,8 +1,5 @@
 # Amla Oil
 
-vitamin 40
-
-
 ## Overview
 Amla oil is derived from the Indian gooseberry (*Emblica officinalis*), a key ingredient in Ayurvedic hair care. Celebrated as the richest natural source of Vitamin C, it has long been used to rejuvenate hair and promote scalp health.
 

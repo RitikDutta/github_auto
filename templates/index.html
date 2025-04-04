@@ -9,13 +9,24 @@
         body { font-family: sans-serif; margin: 20px; background-color: #f4f4f4; }
         .container { max-width: 700px; margin: auto; background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
         h1 { text-align: center; color: #333; }
-        textarea { width: 95%; padding: 10px; margin-bottom: 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 1em; min-height: 60px; }
-        input[type="submit"] { background-color: #007bff; color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; font-size: 1em; }
-        input[type="submit"]:hover { background-color: #0056b3; }
+        label { display: block; margin-bottom: 5px; font-weight: bold;}
+        textarea { width: 95%; padding: 10px; margin-bottom: 5px; border: 1px solid #ccc; border-radius: 4px; font-size: 1em; min-height: 70px; }
+        .button-bar { display: flex; align-items: center; margin-bottom: 15px; gap: 10px;}
+        button, input[type="submit"] { background-color: #007bff; color: white; padding: 8px 15px; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9em; transition: background-color 0.2s ease; }
+        button:hover, input[type="submit"]:hover { background-color: #0056b3; }
+        button:disabled { background-color: #cccccc; cursor: not-allowed;}
+        #speak-input-btn { background-color: #28a745; } /* Green for speak input */
+        #speak-input-btn:hover { background-color: #218838; }
+        #speak-input-btn.listening { background-color: #dc3545; } /* Red when listening */
+        #speak-response-btn { background-color: #ffc107; color: #333;} /* Yellow for speak response */
+        #speak-response-btn:hover { background-color: #e0a800;}
+
         .result { margin-top: 20px; padding: 15px; border: 1px solid #eee; background-color: #f9f9f9; border-radius: 4px; }
         .result h2 { margin-top: 0; color: #555; font-size: 1.1em; }
-        .result p, .result pre { margin-bottom: 0; white-space: pre-wrap; word-wrap: break-word; }
+        .result p, .result pre { margin-bottom: 10px; white-space: pre-wrap; word-wrap: break-word; } /* Added margin-bottom */
         .prompt-display { font-style: italic; color: #666; margin-bottom: 10px;}
+        .response-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;}
+
         /* Flash message styles */
         .flash { padding: 10px; margin-bottom: 15px; border-radius: 4px; }
         .flash.success { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
@@ -30,29 +41,25 @@
     <div class="container">
         <h1>Ask the Agent (with GitHub Tools)</h1>
 
-        <!-- Display GitHub Tool Status -->
         <div class="github-status">
-            GitHub Tools:
-            {% if github_enabled %}
-                <span class="status-enabled">Enabled</span>
-            {% else %}
-                <span class="status-disabled">Disabled</span>
-            {% endif %}
+            GitHub Tools: {% if github_enabled %} <span class="status-enabled">Enabled</span> {% else %} <span class="status-disabled">Disabled</span> {% endif %}
         </div>
 
-        <!-- Display Flashed Messages -->
         {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}
-                {% for category, message in messages %}
-                    <div class="flash {{ category }}">{{ message }}</div>
-                {% endfor %}
+                {% for category, message in messages %} <div class="flash {{ category }}">{{ message }}</div> {% endfor %}
             {% endif %}
         {% endwith %}
 
-        <form method="post">
-            <label for="prompt">Enter your prompt:</label><br>
-            <textarea id="prompt" name="prompt" rows="3" required>{{ prompt if prompt else '' }}</textarea><br> <!-- Retain prompt on page reload -->
-            <input type="submit" value="Send to Agent">
+        <form method="post" id="prompt-form">
+            <label for="prompt">Enter your prompt:</label>
+            <textarea id="prompt" name="prompt" rows="4" required>{{ prompt if prompt else '' }}</textarea>
+
+            <div class="button-bar">
+                 <!-- STT Button -->
+                <button type="button" id="speak-input-btn" title="Speak your prompt">🎤 Speak</button>
+                <input type="submit" value="Send to Agent">
+            </div>
         </form>
 
         <!-- Display the result if available -->
@@ -63,10 +70,343 @@
                 <p class="prompt-display">{{ prompt }}</p>
                 <hr>
                 {% endif %}
-                <h2>Agent Response:</h2>
-                <pre>{{ response }}</pre>
+                <div class="response-header">
+                     <h2>Agent Response:</h2>
+                     <!-- TTS Button for Response -->
+                     <button type="button" id="speak-response-btn" title="Speak the response">🔊 Speak</button>
+                </div>
+                <!-- Added id to pre tag for easy selection -->
+                <pre id="llm-response-content">{{ response }}</pre>
             </div>
         {% endif %}
     </div>
+
+    <!-- JavaScript for Speech Recognition (STT) and Synthesis (TTS) -->
+    <script>
+        // --- Common Elements ---
+        const promptTextArea = document.getElementById('prompt');
+        const responseContentElement = document.getElementById('llm-response-content');
+        const ttsButton = document.getElementById('speak-response-btn');
+        const sttButton = document.getElementById('speak-input-btn');
+
+        // --- Speech Synthesis (TTS) ---
+        let ttsVoices = [];
+        let isSpeaking = false; // Track speaking state
+
+        function populateVoiceList() {
+            console.log("Attempting to populate voice list...");
+            if (typeof speechSynthesis === 'undefined') {
+                console.error("TTS Error: speechSynthesis API not supported.");
+                if(ttsButton) {
+                    ttsButton.textContent = '🔊 Not Supported';
+                    ttsButton.disabled = true;
+                }
+                return;
+            }
+
+            ttsVoices = speechSynthesis.getVoices();
+            if (ttsVoices.length === 0) {
+                console.warn("TTS Warning: getVoices() returned empty list. Waiting for onvoiceschanged...");
+                // Keep button disabled for now, rely on onvoiceschanged
+                if(ttsButton) ttsButton.disabled = true;
+            } else {
+                 console.log("TTS Info: Voices loaded:", ttsVoices.length);
+                 // console.log("Available TTS voices:", ttsVoices.map(v => `${v.name} (${v.lang})`)); // DEBUG: List all voices
+                 updateTTSButtonState(); // Update button state now that voices are potentially ready
+            }
+        }
+
+        function updateTTSButtonState() {
+             if (!ttsButton || !responseContentElement) return; // Elements not ready
+
+             const hasContent = responseContentElement.textContent && responseContentElement.textContent.trim() !== '';
+             const voicesLoaded = ttsVoices.length > 0;
+             const canSpeak = hasContent && voicesLoaded;
+
+             console.log(`TTS Button State Check: hasContent=${hasContent}, voicesLoaded=${voicesLoaded}, canSpeak=${canSpeak}, isSpeaking=${isSpeaking}`);
+
+             if (!isSpeaking) { // Only change if not currently speaking
+                 ttsButton.disabled = !canSpeak;
+                 ttsButton.textContent = canSpeak ? '🔊 Speak' : (hasContent ? '🔊 Loading Voices...' : '🔊 Speak');
+             }
+        }
+
+        // Ensure voices are loaded (critical for many browsers)
+        if (typeof speechSynthesis !== 'undefined') {
+            if (speechSynthesis.onvoiceschanged !== undefined) {
+                speechSynthesis.onvoiceschanged = populateVoiceList;
+            }
+            // Call it once initially, might be empty but sets things up
+            populateVoiceList();
+            // Sometimes a small delay helps catch voices if event doesn't fire reliably on initial load
+            setTimeout(populateVoiceList, 250);
+        } else {
+             console.error("TTS Error: speechSynthesis API not supported (initial check).");
+              if(ttsButton) {
+                    ttsButton.textContent = '🔊 Not Supported';
+                    ttsButton.disabled = true;
+              }
+        }
+
+
+        // Function to chunk text (same as before)
+        function chunkSubstr(str, size) {
+            const chunks = [];
+            const sentences = str.match( /[^\.!\?]+[\.!\?]+/g ) || [str];
+            let currentChunk = '';
+            sentences.forEach(sentence => {
+                 sentence = sentence.trim(); if (!sentence) return;
+                 if (currentChunk.length + sentence.length < size) {
+                     currentChunk += (currentChunk ? ' ' : '') + sentence;
+                 } else {
+                     if (currentChunk) chunks.push(currentChunk);
+                     if (sentence.length > size) {
+                         for (let i = 0; i < sentence.length; i += size) chunks.push(sentence.substring(i, i + size));
+                         currentChunk = '';
+                     } else currentChunk = sentence;
+                 }
+             });
+             if (currentChunk) chunks.push(currentChunk);
+             console.log("TTS Info: Text chunked into:", chunks.length, "parts");
+             return chunks;
+        }
+
+        // Function to speak chunks recursively
+        function speakTextByChunks(textChunks, index = 0) {
+             if (!isSpeaking) { // Check if cancelled globally
+                 console.log("TTS Info: Speech cancelled before starting chunk", index);
+                 if (ttsButton) { ttsButton.disabled = false; ttsButton.textContent = '🔊 Speak'; }
+                 return;
+             }
+             if (index < textChunks.length) {
+                const chunk = textChunks[index];
+                if (!chunk || chunk.trim() === '') { // Skip empty chunks
+                     console.log("TTS Skipping empty chunk", index);
+                     speakTextByChunks(textChunks, index + 1);
+                     return;
+                }
+                const utterance = new SpeechSynthesisUtterance(chunk);
+                console.log(`TTS Info: Preparing chunk ${index + 1}: "${chunk.substring(0, 30)}..."`);
+
+                // --- Voice Selection Logic ---
+                let selectedVoice = ttsVoices.find(voice => voice.lang.startsWith('en-US') && voice.name.includes('Google')); // Prefer Google US English
+                 if (!selectedVoice) selectedVoice = ttsVoices.find(voice => voice.lang.startsWith('en') && voice.name.includes('Google')); // Fallback Google English
+                 if (!selectedVoice) selectedVoice = ttsVoices.find(voice => voice.lang.startsWith('en')); // Fallback any English
+                 if (selectedVoice) {
+                     utterance.voice = selectedVoice;
+                     // console.log("TTS Info: Using voice:", selectedVoice.name);
+                 } else console.warn("TTS Warning: No suitable English voice found, using default.");
+                 // --- End Voice Selection ---
+
+                utterance.onstart = () => {
+                    console.log(`TTS Info: Speaking chunk ${index + 1}/${textChunks.length}`);
+                    isSpeaking = true; // Ensure state is correct
+                    if (ttsButton) ttsButton.textContent = '⏹️ Speaking...';
+                    if (ttsButton) ttsButton.disabled = false; // Ensure CANCEL works
+                }
+
+                utterance.onend = () => {
+                    console.log(`TTS Info: Chunk finished: ${index + 1}/${textChunks.length}`);
+                    if (index + 1 < textChunks.length && isSpeaking) { // Check isSpeaking before recursing
+                        setTimeout(() => speakTextByChunks(textChunks, index + 1), 100); // Small delay
+                    } else {
+                        console.log("TTS Info: All chunks finished speaking or cancelled.");
+                        isSpeaking = false;
+                        if (ttsButton) ttsButton.disabled = false; // Re-enable fully
+                        if (ttsButton) ttsButton.textContent = '🔊 Speak';
+                        updateTTSButtonState(); // Final state check
+                    }
+                };
+
+                utterance.onerror = (event) => {
+                    console.error("TTS Error: SpeechSynthesis error:", event.error, "on chunk:", chunk);
+                    isSpeaking = false; // Reset state on error
+                    if (ttsButton) ttsButton.disabled = false;
+                    if (ttsButton) ttsButton.textContent = '🔊 Error';
+                     setTimeout(updateTTSButtonState, 1500); // Reset button text after showing error
+                };
+
+                try {
+                     speechSynthesis.speak(utterance);
+                } catch (e) {
+                     console.error("TTS Error: Exception during speechSynthesis.speak():", e);
+                     isSpeaking = false;
+                     if (ttsButton) ttsButton.disabled = false;
+                     if (ttsButton) ttsButton.textContent = '🔊 Error';
+                     setTimeout(updateTTSButtonState, 1500);
+                }
+            } else {
+                 console.log("TTS Info: Reached end of chunks index.");
+                 isSpeaking = false;
+                 updateTTSButtonState();
+            }
+        }
+
+        // Main speak function
+        function speakResponseText(text) {
+            console.log("TTS Action: speakResponseText called.");
+            if (typeof speechSynthesis === 'undefined') {
+                 console.error("TTS Error: Cannot speak, synthesis API not supported.");
+                 return;
+            }
+
+            if (isSpeaking) { // If already speaking, treat click as STOP
+                console.log("TTS Action: Cancel requested.");
+                speechSynthesis.cancel(); // Stop all utterances
+                isSpeaking = false;
+                if (ttsButton) ttsButton.textContent = '🔊 Speak';
+                if (ttsButton) ttsButton.disabled = false;
+                updateTTSButtonState(); // Ensure correct state after cancel
+                return;
+            }
+
+            if (text && text.trim() !== '') {
+                if (ttsVoices.length === 0) {
+                     console.warn("TTS Warning: No voices loaded yet, cannot speak.");
+                     // Maybe try reloading voices?
+                     populateVoiceList();
+                     flash("Voices not ready, please wait and try again.", "warning"); // Inform user
+                     return;
+                }
+                const textChunks = chunkSubstr(text, 180);
+                if (ttsButton) ttsButton.disabled = true; // Disable temporarily while starting
+                if (ttsButton) ttsButton.textContent = '▶️ Starting...';
+                isSpeaking = true; // Set state before calling recursive function
+                speakTextByChunks(textChunks);
+            } else {
+                console.warn("TTS Warning: No text provided to speak.");
+            }
+        }
+
+        // Attach event listener to the TTS button
+        if (ttsButton) {
+            ttsButton.addEventListener('click', () => {
+                if (responseContentElement) {
+                    const textToSpeak = responseContentElement.textContent;
+                    speakResponseText(textToSpeak);
+                } else {
+                    console.error("TTS Error: Cannot find response content element.");
+                }
+            });
+        }
+
+
+        // --- Speech Recognition (STT) Setup ---
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        let recognition;
+
+        if (SpeechRecognition && sttButton) {
+            try {
+                recognition = new SpeechRecognition();
+                recognition.continuous = false;
+                recognition.lang = 'en-US';
+                recognition.interimResults = false;
+                recognition.maxAlternatives = 1;
+
+                sttButton.addEventListener('click', () => {
+                    if (sttButton.classList.contains('listening')) {
+                        recognition.stop();
+                         console.log("STT Info: Recognition stopped by user.");
+                         // onend will handle button reset
+                    } else {
+                        try {
+                            recognition.start();
+                            sttButton.classList.add('listening');
+                            sttButton.innerHTML = '👂 Listening...';
+                            sttButton.disabled = true;
+                            console.log("STT Info: Recognition started.");
+                        } catch(e) {
+                             console.error("STT Error: Could not start recognition:", e);
+                             sttButton.innerHTML = 'Mic Error';
+                             sttButton.classList.remove('listening');
+                             sttButton.disabled = false;
+                        }
+                    }
+                });
+
+                recognition.onresult = (event) => {
+                    const speechResult = event.results[0][0].transcript;
+                    console.log('STT Info: Confidence: ' + event.results[0][0].confidence);
+                    console.log('STT Info: Result: ' + speechResult);
+                    promptTextArea.value += (promptTextArea.value.trim() ? ' ' : '') + speechResult; // Add space only if needed
+                };
+
+                recognition.onspeechend = () => {
+                    console.log("STT Info: User finished speaking.");
+                    // Don't call recognition.stop() here, let it process final result then call onend
+                };
+
+                recognition.onend = () => {
+                     console.log("STT Info: Recognition ended.");
+                    sttButton.classList.remove('listening');
+                    sttButton.innerHTML = '🎤 Speak';
+                    sttButton.disabled = false;
+                };
+
+                recognition.onerror = (event) => {
+                    console.error('STT Error:', event.error);
+                    let errorMessage = '🎤 Error';
+                    if (event.error === 'no-speech') errorMessage = '🎤 No speech';
+                    else if (event.error === 'audio-capture') errorMessage = '🎤 Mic Fail';
+                    else if (event.error === 'not-allowed') errorMessage = '🎤 Denied';
+                    sttButton.innerHTML = errorMessage;
+                    sttButton.classList.remove('listening'); // Ensure class is removed on error
+                    // Keep button disabled briefly to show error? Or enable immediately? Enable is likely better.
+                    sttButton.disabled = false;
+                    // setTimeout(() => { // Optional: Reset text after showing error
+                    //    if (!sttButton.classList.contains('listening')) sttButton.innerHTML = '🎤 Speak';
+                    // }, 2000);
+                };
+                 sttButton.disabled = false; // Ensure enabled on load if API exists
+                 console.log("STT Info: Recognition initialized.");
+
+            } catch (e) {
+                 console.error("STT Error: Failed to initialize SpeechRecognition:", e);
+                 if(sttButton) {
+                    sttButton.disabled = true;
+                    sttButton.textContent = "🎤 Init Fail";
+                 }
+            }
+
+        } else {
+            console.warn("STT Warning: Speech Recognition not supported.");
+            if(sttButton) {
+                sttButton.disabled = true;
+                sttButton.textContent = "🎤 Not Supported";
+            }
+        }
+
+
+        // --- Utility Function for Flashing Messages (Client-side) ---
+        // Useful if you want to show non-Flask messages e.g., "Voices not ready"
+        function flash(message, category = 'info') {
+             const container = document.querySelector('.container'); // Adjust selector if needed
+             if (!container) return;
+
+             const flashDiv = document.createElement('div');
+             flashDiv.className = `flash ${category}`;
+             flashDiv.textContent = message;
+
+             // Insert after the h1 or at the top of the container
+             container.insertBefore(flashDiv, container.children[1] || null);
+
+             // Remove the message after a few seconds
+             setTimeout(() => {
+                 flashDiv.style.opacity = '0';
+                 setTimeout(() => flashDiv.remove(), 500); // Remove after fade out
+             }, 4000);
+         }
+
+
+        // --- Initial Page Load Setup ---
+         window.addEventListener('load', () => {
+             console.log("Window loaded.");
+             // Ensure voices are populated and button state is correct
+             populateVoiceList();
+             updateTTSButtonState(); // Call after potential voice loading
+         });
+
+    </script>
+
 </body>
 </html>
